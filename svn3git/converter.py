@@ -178,7 +178,7 @@ class Converter:
         external: str
         for external in git_svn_show(self.repo, "externals"):
             match = re.match(
-                r"^(\/(?P<path_base>.+))?\/((?P<url>(\w+):\/\/[^ @]+)|(?P<current>\^[^ @]+)|(?P<parent>\.\.\/[^ @]+))(@(?P<revision>\d+))? (?P<path_local>.*)$",
+                r"^(\/(?P<path_base>.+?))?\/((?P<url>(\w+):\/\/[^ @]+)|(\^\/(?P<current>[^ @]+))|(?P<parent>\.\.\/[^ @]+))(@(?P<revision>\d+))? (?P<path_local>.*)$",
                 external,
             )
             if not match:
@@ -190,7 +190,7 @@ class Converter:
                 svn_externals_repos.append((match.group('url'), path, match.group('revision')))
 
             elif match.group('parent'):
-                svn_externals_local_symlinks.append((match.group('parent'), path, match.group('revision')))
+                svn_externals_local_symlinks.append((os.path.relpath(os.path.join(path, match.group('parent'))), path, match.group('revision')))
 
             elif match.group('current'):
                 svn_externals_local_symlinks.append((match.group('current'), path, match.group('revision')))
@@ -208,6 +208,28 @@ class Converter:
         except (FileNotFoundError, json.JSONDecodeError):
             return {}
 
+    def svn_path_to_branch(self, svn_path, revision):
+        path_parts = svn_path.strip('/').split('/')
+        if not path_parts:
+            # probably obsolete as branches are now handled per path
+            raise NotImplementedError
+
+        elif path_parts[0] == "trunk":
+            branch = ""  # default / main
+            repo_path_prefix = "trunk"
+
+        elif path_parts[0] == 'branches':
+            branch = path_parts[1]
+            repo_path_prefix = f"branches/{branch}"
+
+        else:
+            raise SvnExternalError(path_parts)
+
+        if revision:
+            branch += f"@{revision}"
+
+        return repo_path_prefix, branch or None
+
     def get_unlinked_externals(self):
         svn_externals_repos, svn_externals_local_symlinks = self.get_externals()
 
@@ -222,19 +244,20 @@ class Converter:
         external_paths_table = Table(
             Column("Local Path"),
             Column("External SVN-Repository"),
-            Column("External Path"),
-            Column("External Branch"),
+            Column("Destination"),
+            Column("Branch"),
             Column("Status", justify="right"),
         )
         external_repos_unlinked = defaultdict(list)
 
-        for repo_path, local_path, revision in svn_externals_local_symlinks:
+        for destination_path, local_path, revision in svn_externals_local_symlinks:
+            repo_path_prefix, branch = self.svn_path_to_branch(destination_path, revision)
             external_paths_table.add_row(
                 local_path,
                 None,
-                repo_path,
-                f"@{revision}" if revision else None,
-                "✅" if os.path.exists(os.path.join(self.repo.working_dir, local_path)) else "",
+                destination_path.removeprefix(repo_path_prefix).removeprefix('/'),
+                branch,
+                "✅" if os.path.exists(os.path.join(self.working_dir, local_path)) else "",
             )
 
         for svn_repo_name, paths in external_repos.items():
@@ -245,28 +268,11 @@ class Converter:
             ):
                 continue
 
-            for repo_path, local_path, revision in paths:
+            for repo_path_full, local_path, revision in paths:
                 is_linked = os.path.exists(os.path.join(self.repo.working_dir, local_path))
-                svn_path = os.path.commonprefix([path[0] for path in paths]).strip('/').split('/')
-                if not svn_path:
-                    # probably obsolete as branches are now handled per path
-                    raise NotImplementedError
-
-                elif svn_path[0] == "trunk":
-                    branch = ""  # default / main
-                    repo_path_prefix = "trunk"
-
-                elif svn_path[0] == 'branches':
-                    branch = svn_path[1]
-                    repo_path_prefix = f"branches/{branch}"
-
-                else:
-                    raise SvnExternalError(svn_path)
-
-                if revision:
-                    branch += f"@{revision}"
-
-                repo_path = repo_path.removeprefix(repo_path_prefix).removeprefix('/')
+                svn_path = os.path.commonprefix([path[0] for path in paths])
+                repo_path_prefix, branch = self.svn_path_to_branch(svn_path, revision)
+                repo_path = repo_path_full.removeprefix(repo_path_prefix).removeprefix('/')
 
                 external_paths_table.add_row(
                     local_path,
@@ -277,7 +283,7 @@ class Converter:
                 )
 
                 if not is_linked:
-                    external_repos_unlinked[svn_repo_name].append((repo_path, local_path, branch or None))
+                    external_repos_unlinked[svn_repo_name].append((repo_path, local_path, branch))
 
         return external_repos_unlinked, external_paths_table, submodules_temp_config
 

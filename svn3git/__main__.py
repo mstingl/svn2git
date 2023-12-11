@@ -411,13 +411,8 @@ def do_update(
         if svn_externals_local_symlinks:
             progress.stop()
             print(
-                "[yellow][b]WARNING[/b]: This SVN repository contains externals with [b]local links[/b]. Those will [b]not[/b] be migrated automatically.[/yellow]"
+                "[yellow][b]WARNING[/b]: This SVN repository contains externals with [b]local links[/b]. Those were [b]not[/b] migrated automatically.[/yellow]"
             )
-            for symlink_path, relative_path in svn_externals_local_symlinks:
-                local_path = os.path.relpath(
-                    os.path.realpath(repo.working_dir + '/' + os.path.dirname(symlink_path) + relative_path), repo.working_dir
-                )
-                print(f"  {local_path} -> {symlink_path}")
 
 
 if __name__ == "__main__":
