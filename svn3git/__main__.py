@@ -167,7 +167,11 @@ def do_update(
         if svn_fetch:
             with task(progress, "Fetching updates from SVN") as task_id:
                 try:
-                    converter.svn_fetch(start=svn_revision_start, stop=svn_revision_stop, progress=lambda d: progress.update(task_id, **d))
+                    converter.svn_fetch(
+                        start=svn_revision_start,
+                        stop=svn_revision_stop,
+                        progress=lambda d: progress.update(task_id, **d),
+                    )
 
                 except MissingAuthorError as error:
                     progress.stop()
@@ -275,7 +279,11 @@ def do_update(
             print("[yellow][b]WARNING[/b]: This SVN repository contains externals to [b]other repositories[/b][/yellow]")
 
             try:
-                external_repos_unlinked, external_paths_table, submodules_temp_config = converter.get_unlinked_externals()
+                (
+                    external_repos_unlinked,
+                    external_paths_table,
+                    submodules_temp_config,
+                ) = converter.get_unlinked_externals()
 
             except SvnExternalError as error:
                 print("[red]Cannot work with external path [b]%s[/b][/red]" % error.args[0])
