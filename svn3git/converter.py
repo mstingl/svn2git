@@ -190,10 +190,15 @@ class Converter:
                 svn_externals_repos.append((match.group('url'), path, match.group('revision')))
 
             elif match.group('parent'):
-                svn_externals_local_symlinks.append((os.path.relpath(os.path.join(path, match.group('parent'))), path, match.group('revision')))
+                if match.group('revision'):
+                    raise ValueError
+
+                svn_externals_local_symlinks.append((os.path.relpath(os.path.join(path, match.group('parent'))), path, None))
 
             elif match.group('current'):
-                svn_externals_local_symlinks.append((match.group('current'), path, match.group('revision')))
+                destination_path = match.group('current')
+                repo_path_prefix, branch = self.svn_path_to_branch(destination_path, match.group('revision'))
+                svn_externals_local_symlinks.append((destination_path.removeprefix(repo_path_prefix).removeprefix('/'), path, branch))
 
             else:
                 raise NotImplementedError
@@ -250,12 +255,11 @@ class Converter:
         )
         external_repos_unlinked = defaultdict(list)
 
-        for destination_path, local_path, revision in svn_externals_local_symlinks:
-            repo_path_prefix, branch = self.svn_path_to_branch(destination_path, revision)
+        for destination_path, local_path, branch in svn_externals_local_symlinks:
             external_paths_table.add_row(
                 local_path,
                 None,
-                destination_path.removeprefix(repo_path_prefix).removeprefix('/'),
+                destination_path,
                 branch,
                 "✅" if os.path.exists(os.path.join(self.working_dir, local_path)) else "",
             )
