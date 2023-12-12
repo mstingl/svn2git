@@ -178,7 +178,7 @@ class Converter:
         external: str
         for external in git_svn_show(self.repo, "externals"):
             match = re.match(
-                r"^(\/(?P<path_base>.+?))?\/((?P<url>(\w+):\/\/[^ @]+)|(\^\/(?P<current>[^ @]+))|(?P<parent>\.\.\/[^ @]+))(@(?P<revision>\d+))? (?P<path_local>.*)$",
+                r"^(\/(?P<path_base>.*?))?((\/)|(-r \d+ ))((?P<url>(\w+):\/\/[^ @]+)|(\^\/(?P<current>[^ @]+))|(?P<parent>\.\.\/[^ @]+))(@(?P<revision>\d+))? (?P<path_local>.*)$",
                 external,
             )
             if not match:
