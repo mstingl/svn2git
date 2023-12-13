@@ -320,7 +320,7 @@ def do_update(
                             selected_paths.append(paths[i])
 
                         default_branch = selected_paths[0][2]
-                        if '@' in default_branch:
+                        if default_branch and '@' in default_branch:
                             default_branch, revision = default_branch.split('@')
 
                         branch = Prompt.ask("Chose branch (empty to use default)", default=default_branch)
