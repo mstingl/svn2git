@@ -177,6 +177,9 @@ class Converter:
         svn_externals_local_symlinks = []
         external: str
         for external in git_svn_show(self.repo, "externals"):
+            if external.strip('/').startswith('#'):
+                continue
+
             match = re.match(
                 r"^(\/(?P<path_base>.*?))?((\/)|(-r \d+ ))((?P<url>(\w+):\/\/[^ @]+)|(\^\/(?P<current>[^ @]+))|(?P<parent>\.\.\/[^ @]+))(@(?P<revision>\d+))? (?P<path_local>.*)$",
                 external,
