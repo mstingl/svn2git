@@ -177,7 +177,7 @@ class Converter:
         svn_externals_local_symlinks = []
         external: str
         for external in git_svn_show(self.repo, "externals"):
-            if external.strip('/').startswith('#'):
+            if external.endswith('#'):
                 continue
 
             match = re.match(
