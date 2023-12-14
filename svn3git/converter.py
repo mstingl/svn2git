@@ -4,7 +4,7 @@ import re
 import shutil
 from collections import defaultdict
 from functools import cache, partial
-from typing import Callable, Optional
+from typing import Callable, List, Optional, Tuple
 
 from git import Actor, Head, RemoteReference, Repo
 from git.cmd import handle_process_output
@@ -173,8 +173,8 @@ class Converter:
 
     @cache
     def get_externals(self):
+        external_repos: defaultdict[str, List[Tuple[str, str, Optional[str]]]] = defaultdict(list)
         svn_externals_repos = []
-        svn_externals_local_symlinks = []
         external: str
         for external in git_svn_show(self.repo, "externals"):
             if external.endswith('#'):
@@ -196,17 +196,23 @@ class Converter:
                 if match.group('revision'):
                     raise ValueError
 
-                svn_externals_local_symlinks.append((os.path.relpath(os.path.join(path, match.group('parent'))), path, None))
+                external_repos[None].append((os.path.relpath(os.path.join(path, match.group('parent'))), path, None))
 
             elif match.group('current'):
                 destination_path = match.group('current')
                 repo_path_prefix, ref = self.svn_path_to_ref(destination_path, match.group('revision'))
-                svn_externals_local_symlinks.append((destination_path.removeprefix(repo_path_prefix).removeprefix('/'), path, ref))
+                external_repos[None].append((destination_path.removeprefix(repo_path_prefix).removeprefix('/'), path, ref))
 
             else:
                 raise NotImplementedError
 
-        return svn_externals_repos, svn_externals_local_symlinks
+        svn_url_prefix = os.path.commonprefix([self.svn_url, *[external[0] for external in svn_externals_repos]])
+        for external_url, local_path, revision in svn_externals_repos:
+            svn_repo_name, repo_path = external_url.removeprefix(svn_url_prefix).split('/', 1)
+            repo_path_prefix, ref = self.svn_path_to_ref(repo_path, revision)
+            external_repos[svn_repo_name].append([repo_path.removeprefix(repo_path_prefix).removeprefix('/'), local_path, ref])
+
+        return external_repos
 
     def get_submodules_temp_config(self) -> dict:
         try:
@@ -241,19 +247,8 @@ class Converter:
 
         return repo_path_prefix, ref or None
 
-    def _transform_externals_repos_to_repo_paths(self, svn_externals_repos):
-        external_repos = defaultdict(list)
-        svn_url_prefix = os.path.commonprefix([self.svn_url, *[external[0] for external in svn_externals_repos]])
-        for external_url, local_path, revision in svn_externals_repos:
-            svn_repo_name, repo_path = external_url.removeprefix(svn_url_prefix).split('/', 1)
-            repo_path_prefix, ref = self.svn_path_to_ref(repo_path, revision)
-            external_repos[svn_repo_name].append([repo_path.removeprefix(repo_path_prefix).removeprefix('/'), local_path, ref])
-
-        return external_repos
-
     def get_unlinked_externals(self):
-        svn_externals_repos, svn_externals_local_symlinks = self.get_externals()
-        external_repos = self._transform_externals_repos_to_repo_paths(svn_externals_repos)
+        external_repos = self.get_externals()
         submodules_temp_config = self.get_submodules_temp_config()
 
         external_paths_table = Table(
@@ -265,22 +260,14 @@ class Converter:
         )
         external_repos_unlinked = defaultdict(list)
 
-        for destination_path, local_path, branch in svn_externals_local_symlinks:
-            external_paths_table.add_row(
-                local_path,
-                None,
-                destination_path,
-                branch,
-                "✅" if os.path.exists(os.path.join(self.working_dir, local_path)) else "",
-            )
-
         for svn_repo_name, paths in external_repos.items():
-            if (
-                not paths
-                or svn_repo_name in submodules_temp_config
-                or next(filter(lambda s: s.get('svn_repo_name') == svn_repo_name, submodules_temp_config.values()), None)
-            ):
+            if not paths:
                 continue
+
+            is_submodule_defined = svn_repo_name and (
+                svn_repo_name in submodules_temp_config
+                or next(filter(lambda s: s.get('svn_repo_name') == svn_repo_name, submodules_temp_config.values()), None)
+            )
 
             for repo_path, local_path, ref in paths:
                 is_linked = os.path.exists(os.path.join(self.repo.working_dir, local_path))
@@ -293,7 +280,7 @@ class Converter:
                     "✅" if is_linked else "",
                 )
 
-                if not is_linked:
+                if svn_repo_name and not is_linked and not is_submodule_defined:
                     external_repos_unlinked[svn_repo_name].append((repo_path, local_path, ref))
 
         return external_repos_unlinked, external_paths_table, submodules_temp_config

@@ -257,7 +257,7 @@ def do_update(
         with task(progress, "Retrieving additional SVN options", total=1) as task_id:
             try:
                 try:
-                    svn_externals_repos, svn_externals_local_symlinks = converter.get_externals()
+                    svn_externals = converter.get_externals()  # preload data into cache
 
                 except ValueError as error:
                     progress.stop()
@@ -274,7 +274,7 @@ def do_update(
         with task(progress, "Migrate ignored files to GIT"):
             converter.migrate_gitignore()
 
-        if svn_externals_repos:
+        if any(svn_externals.keys()):
             progress.stop()
             print("[yellow][b]WARNING[/b]: This SVN repository contains externals to [b]other repositories[/b][/yellow]")
 
@@ -408,7 +408,7 @@ def do_update(
                         )
                         progress.advance(task_id)
 
-        if svn_externals_local_symlinks:
+        if not all(svn_externals.keys()):
             progress.stop()
             print(
                 "[yellow][b]WARNING[/b]: This SVN repository contains externals with [b]local links[/b]. Those were [b]not[/b] migrated automatically.[/yellow]"
