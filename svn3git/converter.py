@@ -217,10 +217,9 @@ class Converter:
             return {}
 
     def svn_path_to_ref(self, svn_path, revision):
-        path_parts = svn_path.strip('/').split('/')
+        path_parts = [p for p in svn_path.strip('/').split('/') if p]
         if not path_parts:
-            # probably obsolete as branches are now handled per path
-            raise NotImplementedError
+            raise ValueError
 
         elif path_parts[0] == "trunk":
             ref = ""  # default / main
@@ -242,16 +241,20 @@ class Converter:
 
         return repo_path_prefix, ref or None
 
-    def get_unlinked_externals(self):
-        svn_externals_repos, svn_externals_local_symlinks = self.get_externals()
-
-        submodules_temp_config = self.get_submodules_temp_config()
-
+    def _transform_externals_repos_to_repo_paths(self, svn_externals_repos):
         external_repos = defaultdict(list)
         svn_url_prefix = os.path.commonprefix([self.svn_url, *[external[0] for external in svn_externals_repos]])
         for external_url, local_path, revision in svn_externals_repos:
             svn_repo_name, repo_path = external_url.removeprefix(svn_url_prefix).split('/', 1)
-            external_repos[svn_repo_name].append([repo_path, local_path, revision])
+            repo_path_prefix, ref = self.svn_path_to_ref(repo_path, revision)
+            external_repos[svn_repo_name].append([repo_path.removeprefix(repo_path_prefix).removeprefix('/'), local_path, ref])
+
+        return external_repos
+
+    def get_unlinked_externals(self):
+        svn_externals_repos, svn_externals_local_symlinks = self.get_externals()
+        external_repos = self._transform_externals_repos_to_repo_paths(svn_externals_repos)
+        submodules_temp_config = self.get_submodules_temp_config()
 
         external_paths_table = Table(
             Column("Local Path"),
@@ -279,11 +282,8 @@ class Converter:
             ):
                 continue
 
-            for repo_path_full, local_path, revision in paths:
+            for repo_path, local_path, ref in paths:
                 is_linked = os.path.exists(os.path.join(self.repo.working_dir, local_path))
-                svn_path = os.path.commonprefix([path[0] for path in paths])
-                repo_path_prefix, ref = self.svn_path_to_ref(svn_path, revision)
-                repo_path = repo_path_full.removeprefix(repo_path_prefix).removeprefix('/')
 
                 external_paths_table.add_row(
                     local_path,
