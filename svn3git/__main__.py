@@ -271,8 +271,8 @@ def do_update(
                 print("[red][b]ERROR[/b]: Cannot get options from SVN[/red]")
                 return
 
-        with task(progress, "Migrate ignored files to GIT"):
-            converter.migrate_gitignore()
+        with task(progress, "Migrate ignored files to GIT") as task_id:
+            converter.migrate_gitignore(cherrypick_progress=lambda d: progress.update(task_id, **d))
 
         if any(svn_externals.keys()):
             progress.stop()
@@ -387,7 +387,9 @@ def do_update(
 
             if migrate_externals_to_submodules:
                 with task(progress, "Create Submodules", total=len(submodules_temp_config)) as task_id:
-                    converter.migrate_externals_to_submodules(submodules_temp_config, progress)
+                    with task(progress, "Updating branches", total=len(submodules_temp_config), remove_after_complete=True, start=False) as cherrypick_task_id:
+                        for _ in converter.migrate_externals_to_submodules(submodules_temp_config, cherrypick_progress=lambda d: (progress.start_task(cherrypick_task_id), progress.update(cherrypick_task_id, **d))):
+                            progress.advance(task_id)
 
                 os.remove(converter.svn_externals_to_git_config_file)
 

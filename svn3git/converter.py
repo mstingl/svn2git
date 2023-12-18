@@ -15,7 +15,7 @@ from rich.table import Column, Table
 from svn.remote import RemoteClient
 
 from .exceptions import MergeError, MissingAuthorError, MissingBranchError, SvnExternalError, SvnFetchError, SvnOptionsReadError, TagExistsError
-from .utils import cherrypick_to_all_branches, cherrypick_to_all_branches_with_progress, git_svn_show, reference_name, rmtree_error_handler
+from .utils import cherrypick_to_all_branches, git_svn_show, reference_name, rmtree_error_handler
 
 
 class Converter:
@@ -135,7 +135,7 @@ class Converter:
         except IndexError:
             raise MissingBranchError("main")
 
-    def migrate_gitignore(self, progress: Optional[Progress] = None):
+    def migrate_gitignore(self, cherrypick_progress: Callable[[dict], None] = lambda d: None):
         try:
             svn_ignore = git_svn_show(self.repo, "ignore")
 
@@ -165,11 +165,7 @@ class Converter:
 
             self.repo.index.add(['.gitignore'])
             commit = self.repo.index.commit("Migrate svn:ignore to .gitignore", skip_hooks=True, author=Actor("svn2git", "svn2git@example.com"))
-            if progress:
-                cherrypick_to_all_branches_with_progress(self.repo, commit, progress, self.refs_to_push)
-
-            else:
-                cherrypick_to_all_branches(self.repo, commit, self.refs_to_push)
+            cherrypick_to_all_branches(self.repo, commit, self.refs_to_push, cherrypick_progress, log=self.log)
 
     @cache
     def get_externals(self):
@@ -285,7 +281,7 @@ class Converter:
 
         return external_repos_unlinked, external_paths_table, submodules_temp_config
 
-    def migrate_externals_to_submodules(self, submodules_temp_config: Optional[dict] = None, progress: Optional[Progress] = None):
+    def migrate_externals_to_submodules(self, submodules_temp_config: Optional[dict] = None, cherrypick_progress: Callable[[dict], None] = lambda d: None):
         files_to_add = set()
         if submodules_temp_config is None:
             submodules_temp_config = self.get_submodules_temp_config()
@@ -304,7 +300,7 @@ class Converter:
                 shutil.rmtree(os.path.join(self.working_dir, submodule['submodule_path']), onerror=rmtree_error_handler)
                 shutil.rmtree(os.path.join(self.working_dir, ".git", "modules", submodule['repo_name']), onerror=rmtree_error_handler)
 
-                progress.log(
+                self.log(
                     f"Creating submodule {submodule['repo_name']} ({submodule['git_external_url']}@{submodule['branch'] or 'main'}) at {submodule['submodule_path']}"
                 )
                 submodule = self.repo.create_submodule(
@@ -333,7 +329,7 @@ class Converter:
                     submodule['common_path_replacement'] + repo_path.removeprefix(submodule['common_path_prefix']),
                 )
                 origin_relative = os.path.join(os.path.relpath(self.working_dir, full_local_path_dirname), origin)
-                progress.log(f"Creating symlink {local_path} to {origin_relative}")
+                self.log(f"Creating symlink {local_path} to {origin_relative}")
 
                 os.makedirs(full_local_path_dirname, exist_ok=True)
                 os.symlink(
@@ -348,4 +344,4 @@ class Converter:
         if files_to_add:
             self.repo.git.add(*files_to_add)  # repo.index.add does not work with symlinks
             commit = self.repo.index.commit("Add svn externals as git submodules", skip_hooks=True, author=Actor("svn2git", "svn2git@example.com"))
-            cherrypick_to_all_branches_with_progress(self.repo, commit, progress, self.refs_to_push)
+            cherrypick_to_all_branches(self.repo, commit, self.refs_to_push, cherrypick_progress, log=self.log)

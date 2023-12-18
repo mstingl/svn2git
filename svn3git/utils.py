@@ -14,8 +14,9 @@ def task(
     indeterminate: bool = True,
     total: Optional[int] = None,
     remove_after_complete: bool = False,
+    start: bool = True,
 ):
-    task_id = progress.add_task(name, total=total)
+    task_id = progress.add_task(name, total=total, start=start)
     yield task_id
     if indeterminate:
         count = total or progress._tasks[task_id].total or 1
@@ -70,7 +71,9 @@ def reference_name(reference):
     return reference.remote_head if reference.is_remote() else reference.name
 
 
-def cherrypick_to_all_branches(repo: Repo, commit: Commit, refs_to_push: set):
+def cherrypick_to_all_branches(repo: Repo, commit: Commit, refs_to_push: set, progress: Callable[[dict], None] = lambda d: None, log: Callable[[str], None] = lambda s: None):
+    total = len(repo.branches)
+    completed = 0
     for branch in repo.branches:
         if branch.name == "main":
             continue
@@ -83,18 +86,10 @@ def cherrypick_to_all_branches(repo: Repo, commit: Commit, refs_to_push: set):
             repo.git.cherry_pick(skip=True)
 
         refs_to_push.add(branch)
-        yield branch
+        completed += 1
+        progress({'completed': completed, 'total': total})
+        log(f"Cherry-picked {commit.hexsha} to branch {branch.name}")
 
     repo.branches["main"].checkout()
     refs_to_push.add(repo.branches["main"])
-
-
-def cherrypick_to_all_branches_with_progress(repo: Repo, commit: Commit, progress: Progress, refs_to_push: set):
-    with task(
-        progress, "Apply changes to all branches", total=len(repo.branches), remove_after_complete=True
-    ) as task_id:
-        for branch in cherrypick_to_all_branches(repo, commit, refs_to_push):
-            progress.advance(task_id)
-            progress.log(f"Cherry-picked {commit.hexsha} to branch {branch.name}")
-
-        progress.advance(task_id)
+    progress({'completed': total, 'total': total})
