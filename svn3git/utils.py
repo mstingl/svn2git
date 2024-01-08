@@ -1,6 +1,6 @@
 import os
 from contextlib import contextmanager
-from typing import Optional
+from typing import Callable, Optional
 
 from git import Commit, Repo
 from git.exc import GitCommandError
@@ -60,18 +60,16 @@ def git_progress(
 
 
 def git_svn_show(repo, cmd) -> list[str]:
-    return [
-        folder
-        for folder in repo.git.svn(f"show-{cmd}", "--id=origin/trunk").splitlines()
-        if folder.strip() and not folder[0] == '#'
-    ]
+    return [folder for folder in repo.git.svn(f"show-{cmd}", "--id=origin/trunk").splitlines() if folder.strip() and not folder[0] == '#']
 
 
 def reference_name(reference):
     return reference.remote_head if reference.is_remote() else reference.name
 
 
-def cherrypick_to_all_branches(repo: Repo, commit: Commit, refs_to_push: set, progress: Callable[[dict], None] = lambda d: None, log: Callable[[str], None] = lambda s: None):
+def cherrypick_to_all_branches(
+    repo: Repo, commit: Commit, refs_to_push: set, progress: Callable[[dict], None] = lambda d: None, log: Callable[[str], None] = lambda s: None
+):
     total = len(repo.branches)
     completed = 0
     for branch in repo.branches:

@@ -387,8 +387,13 @@ def do_update(
 
             if migrate_externals_to_submodules:
                 with task(progress, "Create Submodules", total=len(submodules_temp_config)) as task_id:
-                    with task(progress, "Updating branches", total=len(submodules_temp_config), remove_after_complete=True, start=False) as cherrypick_task_id:
-                        for _ in converter.migrate_externals_to_submodules(submodules_temp_config, cherrypick_progress=lambda d: (progress.start_task(cherrypick_task_id), progress.update(cherrypick_task_id, **d))):
+                    with task(
+                        progress, "Updating branches", total=len(submodules_temp_config), remove_after_complete=True, start=False
+                    ) as cherrypick_task_id:
+                        for _ in converter.migrate_externals_to_submodules(
+                            submodules_temp_config,
+                            cherrypick_progress=lambda d: (progress.start_task(cherrypick_task_id), progress.update(cherrypick_task_id, **d)),
+                        ):
                             progress.advance(task_id)
 
                 os.remove(converter.svn_externals_to_git_config_file)
@@ -403,12 +408,23 @@ def do_update(
                         indeterminate=False,
                         remove_after_complete=True,
                     ) as ref_push_task_id:
-                        repo.remotes.origin.push(
-                            ref,
-                            progress=partial(git_progress, progress=progress, task_id=ref_push_task_id),
-                            force=push_force,
-                        )
-                        progress.advance(task_id)
+                        for _try in range(3):
+                            try:
+                                repo.remotes.origin.push(
+                                    ref,
+                                    progress=partial(git_progress, progress=progress, task_id=ref_push_task_id),
+                                    force=push_force,
+                                )
+                                progress.advance(task_id)
+
+                            except GitCommandError:
+                                if _try < 2:
+                                    continue
+
+                                raise
+
+                            else:
+                                break
 
         if not all(svn_externals.keys()):
             progress.stop()

@@ -115,7 +115,7 @@ class Converter:
 
                 else:
                     if branch.commit.hexsha != reference.commit.hexsha:
-                        self.log("Updating branch %s" % branch_name)
+                        self.log("Updating branch %s from %s to %s" % (branch_name, branch.commit.hexsha, reference.commit.hexsha))
                         branch.checkout(force=True)
 
                         try:
