@@ -2,8 +2,9 @@ import os
 from contextlib import contextmanager
 from typing import Callable, Optional
 
-from git import Commit, Repo
+from git import Commit
 from git.exc import GitCommandError
+from git.repo import Repo
 from rich.progress import Progress
 
 

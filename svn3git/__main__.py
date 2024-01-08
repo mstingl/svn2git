@@ -1,14 +1,13 @@
-import json
 import os
 from functools import partial
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import urlparse
 
 import questionary
 import typer
-from git import Repo
 from git.cmd import handle_process_output
 from git.exc import GitCommandError, InvalidGitRepositoryError, NoSuchPathError
+from git.repo import Repo
 from rich import print
 from rich.progress import (
     BarColumn,
@@ -23,6 +22,7 @@ from rich.progress import (
 from rich.prompt import Prompt
 from rich.table import Column
 
+from .containers import ExternalPath, SubmoduleConfig
 from .converter import Converter
 from .exceptions import MergeError, MissingAuthorError, MissingBranchError, SvnExternalError, SvnFetchError, TagExistsError
 from .utils import *
@@ -76,7 +76,6 @@ def do_update(
 
     except (InvalidGitRepositoryError, NoSuchPathError):
         if not svn_stdlayout and not (svn_trunk and svn_branches and svn_tags):
-            progress.stop()
             print("[red]If stdlayout is not used, [b]--svn-trunk[/b], [b]--svn-branches[/b] and [b]--svn-tags[/b] must be given[/red]")
             return
 
@@ -87,7 +86,7 @@ def do_update(
         repo = Repo.init(folder)
 
     if repo.config_reader().has_section('svn-remote "svn"'):
-        config_svn_url = repo.config_reader().get_value('svn-remote "svn"', 'url')
+        config_svn_url: str = repo.config_reader().get_value('svn-remote "svn"', 'url')  # type: ignore
         if svn_url and config_svn_url.removesuffix('/') != svn_url.removesuffix('/'):
             print("[red]SVN remote is already defined in repository and given url is different from the configured![/red]")
             return
@@ -150,7 +149,7 @@ def do_update(
             if git_fetch:
                 with task(progress, "Fetching updates from GIT") as task_id:
                     repo.remotes.origin.fetch(
-                        progress=partial(git_progress, progress=progress, task_id=task_id),
+                        progress=partial(git_progress, progress=progress, task_id=task_id),  # type: ignore
                     )
 
             elif not push_force:
@@ -256,7 +255,7 @@ def do_update(
         if lfs and lfs_filetypes:
             with task(progress, f"Migrating to LFS"):
                 process = repo.git.lfs("migrate", "import", "--everything", f'--include={lfs_filetypes}', as_process=True)
-                handle_process_output(process, stdout_handler=lambda message: progress.log(message.strip('\n')), stderr_handler=None)
+                handle_process_output(process, stdout_handler=lambda message: progress.log(message.strip('\n')), stderr_handler=None)  # type: ignore
                 process.wait()
 
         if migrate_gitignore:
@@ -273,9 +272,9 @@ def do_update(
                     print("[red]Cannot parse external: %s[/red]" % error.args[0])
                     return
 
-            except GitCommandError:
+            except GitCommandError as error:
                 progress.stop()
-                print("[red][b]ERROR[/b]: Cannot get options from SVN[/red]")
+                print("[red][b]ERROR[/b]: Cannot get options from SVN[/red]: %s" % error.stderr)
                 return
 
         if svn_externals:
@@ -298,7 +297,7 @@ def do_update(
             if migrate_externals_to_submodules:
                 for svn_repo_name, paths in external_repos_unlinked.items():
                     if svn_repo_name is None and paths:
-                        paths = [path for path in paths if path[2]]
+                        paths = [path for path in paths if path.ref]
 
                     if not paths:
                         continue
@@ -306,14 +305,13 @@ def do_update(
                     print(f"[b]{svn_repo_name}[/b]" if svn_repo_name else "[ib]local repo[/ib]")
 
                     choices = [
-                        questionary.Choice(f"{svn_repo_name}/{repo_path} ({branch or 'main'}) <- {local_path}", i)
-                        for i, (repo_path, local_path, branch) in enumerate(paths)
+                        questionary.Choice(f"{svn_repo_name}/{path.repo} ({path.ref or 'main'}) <- {path.local}", i) for i, path in enumerate(paths)
                     ]
 
                     question = questionary.checkbox(
                         "Select folders which belong to the same repository in git",
                         choices=choices,
-                        validate=lambda c: len(set(paths[i][2] for i in c)) == 1,
+                        validate=lambda c: len(set(paths[int(i)].ref for i in c)) == 1,
                     )
                     while not all(c.disabled for c in choices):
                         if len(choices) > 1:
@@ -324,29 +322,29 @@ def do_update(
                         else:
                             selected = [0]
 
-                        selected_paths = []
+                        selected_paths: List[ExternalPath] = []
                         for i in selected:
                             print(f"- {choices[i].title}")
                             selected_paths.append(paths[i])
 
-                        default_branch = selected_paths[0][2]
+                        default_branch, revision = selected_paths[0].ref, None
                         if default_branch and '@' in default_branch:
                             default_branch, revision = default_branch.split('@')
 
-                        branch = Prompt.ask("Chose branch (empty to use default)", default=default_branch)
-                        commit = None
-                        if revision:
-                            while not (commit := Prompt.ask(f"Enter commit hash for revision [b]{revision}[/b]")):
-                                pass
-
                         git_external_url = None
                         while True:
+                            branch = Prompt.ask("Chose branch (empty to use default)", default=default_branch)
+                            commit = None
+                            if revision:
+                                while not (commit := Prompt.ask(f"Enter commit hash for revision [b]{revision}[/b]")):
+                                    pass
+
                             git_external_url = Prompt.ask(f"Input GIT url for repository (on [b]{branch or 'main'}[/b])")
                             if git_external_url:
                                 break
 
                             if typer.confirm("Are you sure to skip this external?"):
-                                submodules_temp_config[svn_repo_name] = {'do_skip': True}
+                                submodules_temp_config[svn_repo_name] = SubmoduleConfig(do_skip=True)  # type: ignore
                                 break
 
                         for i in selected:
@@ -356,14 +354,20 @@ def do_update(
                             continue
 
                         common_path_replacement = ""
-                        common_path_prefix = os.path.commonprefix([path[0] for path in selected_paths])
-                        if not common_path_prefix.endswith("/"):
-                            common_path_prefix = ""
+                        if len(selected_paths) == 1:
+                            common_path_prefix = selected_paths[0].repo
+
+                        else:
+                            common_path_prefix = os.path.commonprefix([path.repo for path in selected_paths])
+                            if not common_path_prefix.endswith("/"):
+                                common_path_prefix = ""
 
                         if not common_path_prefix:
-                            common_path_prefix = os.path.dirname(selected_paths[0][0]) + "/"
+                            common_path_prefix = os.path.dirname(selected_paths[0].repo)
 
-                        if common_path_prefix and typer.confirm(f"Should the common prefix ({common_path_prefix}) be removed or changed?"):
+                        if common_path_prefix and typer.confirm(
+                            f"Should the {'common prefix' if len(selected_paths) > 1 else 'path'} ({common_path_prefix}) be removed or changed?"
+                        ):
                             common_path_replacement = Prompt.ask("Enter replacement or leave empty to remove")
                             if common_path_replacement:
                                 common_path_replacement = common_path_replacement.removesuffix('/') + '/'
@@ -378,20 +382,20 @@ def do_update(
                             print("[red]Overlapping configuration, exiting! Please start again")
                             return
 
-                        submodules_temp_config[submodule_key] = {
-                            'repo_name': git_repo_name,
-                            'svn_repo_name': svn_repo_name,
-                            'submodule_path': submodule_path,
-                            'git_external_url': git_external_url,
-                            'branch': branch,
-                            'commit': commit,
-                            'common_path_replacement': common_path_replacement,
-                            'common_path_prefix': common_path_prefix,
-                            'paths': selected_paths,
-                        }
+                        submodules_temp_config[submodule_key] = SubmoduleConfig(
+                            repo_name=git_repo_name,
+                            svn_repo_name=svn_repo_name,
+                            submodule_path=submodule_path,
+                            git_external_url=git_external_url,
+                            branch=branch,
+                            commit=commit,
+                            common_path_replacement=common_path_replacement,
+                            common_path_prefix=common_path_prefix.removesuffix("/"),
+                            paths=selected_paths,
+                        )
 
                 with open(converter.svn_externals_to_git_config_file, 'wb') as config_file:
-                    config_file.write(bytes(json.dumps(submodules_temp_config), 'utf-8'))
+                    config_file.write(bytes(submodules_temp_config.model_dump_json(), 'utf-8'))
 
             progress.start()
 
@@ -402,7 +406,8 @@ def do_update(
                     ) as cherrypick_task_id:
                         for _ in converter.migrate_externals_to_submodules(
                             submodules_temp_config,
-                            cherrypick_progress=lambda d: (progress.start_task(cherrypick_task_id), progress.update(cherrypick_task_id, **d)),
+                            cherrypick_progress=lambda d: (progress.start_task(cherrypick_task_id), progress.update(cherrypick_task_id, **d)),  # type: ignore
+                            external_repos_unlinked=external_repos_unlinked,
                         ):
                             progress.advance(task_id)
 
@@ -422,7 +427,7 @@ def do_update(
                             try:
                                 repo.remotes.origin.push(
                                     ref,
-                                    progress=partial(git_progress, progress=progress, task_id=ref_push_task_id),
+                                    progress=partial(git_progress, progress=progress, task_id=ref_push_task_id),  # type: ignore
                                     force=push_force,
                                 )
                                 progress.advance(task_id)

@@ -4,16 +4,19 @@ import re
 import shutil
 from collections import defaultdict
 from functools import cache, partial
-from typing import Callable, List, Optional, Tuple
+from types import NoneType
+from typing import Callable, Dict, List, Optional
 
-from git import Actor, Head, RemoteReference, Repo
+from git import Head, RemoteReference
 from git.cmd import handle_process_output
 from git.exc import GitCommandError
+from git.repo import Repo
+from git.util import Actor
 from rich import print
-from rich.progress import Progress
 from rich.table import Column, Table
 from svn.remote import RemoteClient
 
+from .containers import ExternalPath, SubmoduleConfigFile
 from .exceptions import MergeError, MissingAuthorError, MissingBranchError, SvnExternalError, SvnFetchError, SvnOptionsReadError, TagExistsError
 from .utils import cherrypick_to_all_branches, git_svn_show, reference_name, rmtree_error_handler
 
@@ -27,7 +30,7 @@ class Converter:
         self.log = log or print
         self.skip_trunk = skip_trunk
         self.svn_externals_to_git_config_file = os.path.join(self.working_dir, '.svn_externals_to_git_submodules.json')
-        self.svn_url = self.repo.config_reader().get_value('svn-remote "svn"', 'url')
+        self.svn_url: str = self.repo.config_reader().get_value('svn-remote "svn"', 'url')  # type: ignore
 
     @property
     def references(self):
@@ -54,7 +57,7 @@ class Converter:
         while True:
             svn_fetch_stderr = []
             try:
-                process = self.repo.git.svn("fetch", f"--revision={start}:{stop}", "--ignore-refs=tags\/https?:", as_process=True)
+                process = self.repo.git.svn("fetch", f"--revision={start}:{stop}", "--ignore-refs=tags\\/https?:", as_process=True)
                 handle_process_output(process, stdout_handler=svn_log_handler, stderr_handler=partial(svn_err_handler, log=svn_fetch_stderr))
                 process.wait()
 
@@ -84,7 +87,7 @@ class Converter:
                     if not self.force:
                         raise TagExistsError(tag, commit)
 
-                    self.repo.delete_tag(tag_name)
+                    self.repo.delete_tag(tag_name)  # type: ignore
                     self.log("Deleted tag %s" % tag_name)
 
                 tag = self.repo.create_tag(
@@ -156,7 +159,7 @@ class Converter:
         if ignores_to_add := [
             filepath
             for filepath in svn_ignore
-            if self.repo.git.check_ignore(self.working_dir + filepath, no_index=True, with_exceptions=False, with_extended_output=True)[0] != 0
+            if self.repo.git.check_ignore(self.working_dir + filepath, no_index=True, with_exceptions=False, with_extended_output=True)[0] != 0  # type: ignore
             and not filepath in current_gitignore
         ]:
             self.log("[cyan]Updating [b].gitignore[/b][/cyan]")
@@ -169,8 +172,8 @@ class Converter:
 
     @cache
     def get_externals(self):
-        external_repos: defaultdict[str, List[Tuple[str, str, Optional[str]]]] = defaultdict(list)
-        svn_externals_repos = []
+        external_repos: defaultdict[str | NoneType, List[ExternalPath]] = defaultdict(list)
+        svn_externals_repos: List[ExternalPath] = []
         external: str
         for external in git_svn_show(self.repo, "externals"):
             if external.endswith('#'):
@@ -186,37 +189,61 @@ class Converter:
             path = (f"{match.group('path_base')}/" if match.group('path_base') else "") + match.group('path_local')
 
             if match.group('url'):
-                svn_externals_repos.append((match.group('url'), path, match.group('revision')))
+                svn_externals_repos.append(
+                    ExternalPath(
+                        repo=match.group('url'),
+                        local=path,
+                        ref=match.group('revision'),
+                    )
+                )
 
             elif match.group('parent'):
                 if match.group('revision'):
                     raise ValueError
 
-                external_repos[None].append((os.path.relpath(os.path.join(os.path.dirname(path), match.group('parent'))), path, None))
+                external_repos[None].append(
+                    ExternalPath(
+                        repo=os.path.relpath(os.path.join(os.path.dirname(path), match.group('parent'))),
+                        local=path,
+                        ref=None,
+                    )
+                )
 
             elif match.group('current'):
                 destination_path = match.group('current')
                 repo_path_prefix, ref = self.svn_path_to_ref(destination_path, match.group('revision'))
-                external_repos[None].append((destination_path.removeprefix(repo_path_prefix).removeprefix('/'), path, ref))
+                external_repos[None].append(
+                    ExternalPath(
+                        repo=destination_path.removeprefix(repo_path_prefix).removeprefix('/'),
+                        local=path,
+                        ref=ref,
+                    )
+                )
 
             else:
                 raise NotImplementedError
 
-        svn_url_prefix = os.path.commonprefix([self.svn_url, *[external[0] for external in svn_externals_repos]])
-        for external_url, local_path, revision in svn_externals_repos:
-            svn_repo_name, repo_path = external_url.removeprefix(svn_url_prefix).split('/', 1)
-            repo_path_prefix, ref = self.svn_path_to_ref(repo_path, revision)
-            external_repos[svn_repo_name].append([repo_path.removeprefix(repo_path_prefix).removeprefix('/'), local_path, ref])
+        svn_url_prefix = os.path.commonprefix([self.svn_url, *[path.repo for path in svn_externals_repos]])
+        for path in svn_externals_repos:
+            svn_repo_name, repo_path = path.repo.removeprefix(svn_url_prefix).split('/', 1)
+            repo_path_prefix, ref = self.svn_path_to_ref(repo_path, path.ref)
+            external_repos[svn_repo_name].append(
+                ExternalPath(
+                    repo=repo_path.removeprefix(repo_path_prefix).removeprefix('/'),
+                    local=path.local,
+                    ref=ref,
+                )
+            )
 
         return external_repos
 
-    def get_submodules_temp_config(self) -> dict:
+    def get_submodules_temp_config(self) -> SubmoduleConfigFile:
         try:
             with open(self.svn_externals_to_git_config_file, 'rb') as config_file:
-                return json.loads(str(config_file.read(), 'utf-8')) or {}
+                return SubmoduleConfigFile.model_validate_json(str(config_file.read(), 'utf-8') or r'{}')
 
         except (FileNotFoundError, json.JSONDecodeError):
-            return {}
+            return SubmoduleConfigFile(root={})
 
     def svn_path_to_ref(self, svn_path, revision):
         path_parts = [p for p in svn_path.strip('/').split('/') if p]
@@ -254,7 +281,7 @@ class Converter:
             Column("Branch / Ref"),
             Column("Status", justify="right"),
         )
-        external_repos_unlinked = defaultdict(list)
+        external_repos_unlinked: defaultdict[str | NoneType, List[ExternalPath]] = defaultdict(list)
 
         for svn_repo_name, paths in external_repos.items():
             if not paths:
@@ -262,26 +289,26 @@ class Converter:
 
             is_submodule_defined = svn_repo_name and (
                 svn_repo_name in submodules_temp_config
-                or next(filter(lambda s: s.get('svn_repo_name') == svn_repo_name, submodules_temp_config.values()), None)
+                or next(filter(lambda s: s.svn_repo_name == svn_repo_name, submodules_temp_config.values()), None)
             )
 
-            for repo_path, local_path, ref in paths:
-                is_linked = os.path.exists(os.path.join(self.repo.working_dir, local_path))
+            for path in paths:
+                is_linked = os.path.exists(os.path.join(self.repo.working_dir, path.local))
 
                 external_paths_table.add_row(
-                    local_path,
+                    path.local,
                     svn_repo_name,
-                    repo_path,
-                    ref,
+                    path.repo,
+                    path.ref,
                     "[green][b]linked[/b][/green]" if is_linked else "",
                 )
 
                 if not is_linked and not is_submodule_defined:
-                    external_repos_unlinked[svn_repo_name].append((repo_path, local_path, ref))
+                    external_repos_unlinked[svn_repo_name].append(path)
 
-        return external_repos_unlinked, external_paths_table, submodules_temp_config
+        return dict(external_repos_unlinked), external_paths_table, submodules_temp_config
 
-    def _migrate_local_externals_to_symlinks(self, external_repos_unlinked: Optional[dict] = None):
+    def _migrate_local_externals_to_symlinks(self, external_repos_unlinked: Optional[Dict[str | NoneType, List[ExternalPath]]] = None):
         files_to_add = set()
         if external_repos_unlinked is None:
             external_repos_unlinked = self.get_unlinked_externals()[0]
@@ -289,17 +316,17 @@ class Converter:
         if not None in external_repos_unlinked:
             return files_to_add
 
-        for repo_path, local_path, ref in external_repos_unlinked[None]:
-            if ref:
+        for path in external_repos_unlinked[None]:
+            if path.ref:
                 continue
 
-            files_to_add.add(*self._create_symlink(local_path, repo_path))
+            files_to_add.add(*self._create_symlink(path.local, path.repo))
 
         return files_to_add
 
     def migrate_externals_to_submodules(
         self,
-        submodules_temp_config: Optional[dict] = None,
+        submodules_temp_config: Optional[SubmoduleConfigFile] = None,
         cherrypick_progress: Callable[[dict], None] = lambda d: None,
         external_repos_unlinked: Optional[dict] = None,
     ):
@@ -307,40 +334,40 @@ class Converter:
         if submodules_temp_config is None:
             submodules_temp_config = self.get_submodules_temp_config()
 
-        for submodule in submodules_temp_config.values():
+        for submodule_config in submodules_temp_config.values():
             do_reset = False
-            if 'do_skip' in submodule:
+            if submodule_config.do_skip:
                 yield
                 continue
 
             try:
-                self.repo.submodule(submodule['repo_name'])
+                self.repo.submodule(submodule_config.repo_name)
 
             except ValueError:
                 do_reset = True
-                shutil.rmtree(os.path.join(self.working_dir, submodule['submodule_path']), onerror=rmtree_error_handler)
-                shutil.rmtree(os.path.join(self.working_dir, ".git", "modules", submodule['repo_name']), onerror=rmtree_error_handler)
+                shutil.rmtree(os.path.join(self.working_dir, submodule_config.submodule_path), onerror=rmtree_error_handler)
+                shutil.rmtree(os.path.join(self.working_dir, ".git", "modules", submodule_config.repo_name), onerror=rmtree_error_handler)
 
                 self.log(
-                    f"Creating submodule {submodule['repo_name']} ({submodule['git_external_url']}@{submodule['branch'] or 'main'}) at {submodule['submodule_path']}"
+                    f"Creating submodule {submodule_config.repo_name} ({submodule_config.git_external_url}@{submodule_config.branch or 'main'}) at {submodule_config.submodule_path}"
                 )
-                submodule = self.repo.create_submodule(
-                    name=submodule['repo_name'],
-                    path=submodule['submodule_path'],
-                    url=submodule['git_external_url'],
-                    branch=submodule['branch'],
+                created_submodule = self.repo.create_submodule(
+                    name=submodule_config.repo_name,
+                    path=submodule_config.submodule_path,
+                    url=submodule_config.git_external_url,
+                    branch=submodule_config.branch,
                 )
                 files_to_add.add('.gitmodules')
-                if submodule.get('commit'):
-                    submodule_repo = submodule.module()
-                    submodule_repo.head.reset(submodule.get('commit'), working_tree=True)
+                if submodule_config.commit:
+                    submodule_repo = created_submodule.module()
+                    submodule_repo.head.reset(submodule_config.commit, working_tree=True)
 
-            for repo_path, local_path, branch in submodule['paths']:
+            for path in submodule_config.paths:
                 origin = os.path.join(
-                    submodule['submodule_path'],
-                    submodule['common_path_replacement'] + repo_path.removeprefix(submodule['common_path_prefix']),
+                    submodule_config.submodule_path,
+                    submodule_config.common_path_replacement + path.repo.removeprefix(submodule_config.common_path_prefix).removeprefix('/'),
                 )
-                files_to_add.add(*self._create_symlink(local_path, origin, do_reset=do_reset))
+                files_to_add.add(*self._create_symlink(path.local, origin, do_reset=do_reset))
 
             yield
 
@@ -349,7 +376,7 @@ class Converter:
             commit = self.repo.index.commit("Add svn externals as git submodules", skip_hooks=True, author=Actor("svn2git", "svn2git@example.com"))
             cherrypick_to_all_branches(self.repo, commit, self.refs_to_push, cherrypick_progress, log=self.log)
 
-    def _create_symlink(self, local_path, origin, do_reset: bool = False):
+    def _create_symlink(self, local_path: str, origin: str, do_reset: bool = False):
         full_local_path = os.path.join(self.working_dir, local_path)
         if os.path.exists(full_local_path):
             if do_reset:
