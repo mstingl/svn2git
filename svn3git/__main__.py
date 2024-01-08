@@ -47,6 +47,8 @@ def do_update(
     lfs_above: str = '1MB',
     lfs_filetypes: Optional[str] = None,
     migrate_externals_to_submodules: bool = True,
+    update_branches: bool = True,
+    migrate_gitignore: bool = True,
     confirmations: bool = True,
     show_externals: bool = False,
 ):
@@ -194,28 +196,31 @@ def do_update(
 
                 repo.delete_head('master', force=True)
 
-        with task(progress, "Updating branches", total=len(converter.references) + 1) as task_id:
-            try:
-                for ref in converter.update_refs():
-                    progress.advance(task_id)
+        if update_branches:
+            with task(progress, "Updating branches", total=len(converter.references) + 1) as task_id:
+                try:
+                    for ref in converter.update_refs():
+                        progress.advance(task_id)
 
-            except TagExistsError as error:
-                progress.stop()
-                print(
-                    "[red]Tag [b]%s[/b] already exists (on [i]%s[/i] instead of [i]%s[/i]). If you actually want to override, pass [b]--push-force[/b][/red]"
-                    % (error.tag.name, error.tag.commit.hexsha, error.commit.hexsha)
-                )
-                return
+                except TagExistsError as error:
+                    progress.stop()
+                    print(
+                        "[red]Tag [b]%s[/b] already exists (on [i]%s[/i] instead of [i]%s[/i]). If you actually want to override, pass [b]--push-force[/b][/red]"
+                        % (error.tag.name, error.tag.commit.hexsha, error.commit.hexsha)
+                    )
+                    return
 
-            except MergeError as error:
-                progress.stop()
-                print("[red][b]Failed to merge[/b]: %s[/red]" % error.__cause__)
-                return
+                except MergeError as error:
+                    progress.stop()
+                    print("[red][b]Failed to merge[/b]: %s[/red]" % error.__cause__)
+                    return
 
-            except MissingBranchError:
-                progress.stop()
-                print("[red]No [b]main[/b] branch existing, is the SVN repo using the standardlayout? If not, retry with [b]--no-stdlayout[/b][/red]")
-                return
+                except MissingBranchError:
+                    progress.stop()
+                    print(
+                        "[red]No [b]main[/b] branch existing, is the SVN repo using the standardlayout? If not, retry with [b]--no-stdlayout[/b][/red]"
+                    )
+                    return
 
         if not lfs_filetypes and os.path.exists(os.path.join(repo.working_dir, '.gitattributes')):
             lfs = True
@@ -254,7 +259,11 @@ def do_update(
                 handle_process_output(process, stdout_handler=lambda message: progress.log(message.strip('\n')), stderr_handler=None)
                 process.wait()
 
-        with task(progress, "Retrieving additional SVN options", total=1) as task_id:
+        if migrate_gitignore:
+            with task(progress, "Migrate ignored files to GIT") as task_id:
+                converter.migrate_gitignore(cherrypick_progress=lambda d: progress.update(task_id, **d))
+
+        with task(progress, "Checking for SVN externals") as task_id:
             try:
                 try:
                     svn_externals = converter.get_externals()  # preload data into cache
@@ -264,19 +273,14 @@ def do_update(
                     print("[red]Cannot parse external: %s[/red]" % error.args[0])
                     return
 
-                progress.advance(task_id)
-
             except GitCommandError:
                 progress.stop()
                 print("[red][b]ERROR[/b]: Cannot get options from SVN[/red]")
                 return
 
-        with task(progress, "Migrate ignored files to GIT") as task_id:
-            converter.migrate_gitignore(cherrypick_progress=lambda d: progress.update(task_id, **d))
-
-        if any(svn_externals.keys()):
+        if svn_externals:
             progress.stop()
-            print("[yellow][b]WARNING[/b]: This SVN repository contains externals to [b]other repositories[/b][/yellow]")
+            print("[yellow][b]WARNING[/b]: This SVN repository contains externals[/yellow]")
 
             try:
                 (
@@ -293,7 +297,13 @@ def do_update(
 
             if migrate_externals_to_submodules:
                 for svn_repo_name, paths in external_repos_unlinked.items():
-                    print(f"[b]{svn_repo_name}[/b]")
+                    if svn_repo_name is None and paths:
+                        paths = [path for path in paths if path[2]]
+
+                    if not paths:
+                        continue
+
+                    print(f"[b]{svn_repo_name}[/b]" if svn_repo_name else "[ib]local repo[/ib]")
 
                     choices = [
                         questionary.Choice(f"{svn_repo_name}/{repo_path} ({branch or 'main'}) <- {local_path}", i)
@@ -388,7 +398,7 @@ def do_update(
             if migrate_externals_to_submodules:
                 with task(progress, "Create Submodules", total=len(submodules_temp_config)) as task_id:
                     with task(
-                        progress, "Updating branches", total=len(submodules_temp_config), remove_after_complete=True, start=False
+                        progress, "Applying changes to all branches", total=len(submodules_temp_config), remove_after_complete=True, start=False
                     ) as cherrypick_task_id:
                         for _ in converter.migrate_externals_to_submodules(
                             submodules_temp_config,
@@ -427,12 +437,6 @@ def do_update(
 
                             else:
                                 break
-
-        if not all(svn_externals.keys()):
-            progress.stop()
-            print(
-                "[yellow][b]WARNING[/b]: This SVN repository contains externals with [b]local links[/b]. Those were [b]not[/b] migrated automatically. To display all externals, use [b]--show-externals[/b][/yellow]"
-            )
 
 
 if __name__ == "__main__":

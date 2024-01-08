@@ -192,7 +192,7 @@ class Converter:
                 if match.group('revision'):
                     raise ValueError
 
-                external_repos[None].append((os.path.relpath(os.path.join(path, match.group('parent'))), path, None))
+                external_repos[None].append((os.path.relpath(os.path.join(os.path.dirname(path), match.group('parent'))), path, None))
 
             elif match.group('current'):
                 destination_path = match.group('current')
@@ -273,16 +273,37 @@ class Converter:
                     svn_repo_name,
                     repo_path,
                     ref,
-                    "✅" if is_linked else "",
+                    "[green][b]linked[/b][/green]" if is_linked else "",
                 )
 
-                if svn_repo_name and not is_linked and not is_submodule_defined:
+                if not is_linked and not is_submodule_defined:
                     external_repos_unlinked[svn_repo_name].append((repo_path, local_path, ref))
 
         return external_repos_unlinked, external_paths_table, submodules_temp_config
 
-    def migrate_externals_to_submodules(self, submodules_temp_config: Optional[dict] = None, cherrypick_progress: Callable[[dict], None] = lambda d: None):
+    def _migrate_local_externals_to_symlinks(self, external_repos_unlinked: Optional[dict] = None):
         files_to_add = set()
+        if external_repos_unlinked is None:
+            external_repos_unlinked = self.get_unlinked_externals()[0]
+
+        if not None in external_repos_unlinked:
+            return files_to_add
+
+        for repo_path, local_path, ref in external_repos_unlinked[None]:
+            if ref:
+                continue
+
+            files_to_add.add(*self._create_symlink(local_path, repo_path))
+
+        return files_to_add
+
+    def migrate_externals_to_submodules(
+        self,
+        submodules_temp_config: Optional[dict] = None,
+        cherrypick_progress: Callable[[dict], None] = lambda d: None,
+        external_repos_unlinked: Optional[dict] = None,
+    ):
+        files_to_add = self._migrate_local_externals_to_symlinks(external_repos_unlinked)
         if submodules_temp_config is None:
             submodules_temp_config = self.get_submodules_temp_config()
 
@@ -315,29 +336,11 @@ class Converter:
                     submodule_repo.head.reset(submodule.get('commit'), working_tree=True)
 
             for repo_path, local_path, branch in submodule['paths']:
-                full_local_path = os.path.join(self.working_dir, local_path)
-                if os.path.exists(full_local_path):
-                    if do_reset:
-                        os.remove(full_local_path)
-
-                    else:
-                        continue
-
-                full_local_path_dirname = os.path.dirname(full_local_path)
                 origin = os.path.join(
                     submodule['submodule_path'],
                     submodule['common_path_replacement'] + repo_path.removeprefix(submodule['common_path_prefix']),
                 )
-                origin_relative = os.path.join(os.path.relpath(self.working_dir, full_local_path_dirname), origin)
-                self.log(f"Creating symlink {local_path} to {origin_relative}")
-
-                os.makedirs(full_local_path_dirname, exist_ok=True)
-                os.symlink(
-                    origin_relative,
-                    full_local_path,
-                    target_is_directory=os.path.isdir(os.path.join(self.working_dir, origin)),
-                )
-                files_to_add.add(os.path.relpath(full_local_path, self.working_dir))
+                files_to_add.add(*self._create_symlink(local_path, origin, do_reset=do_reset))
 
             yield
 
@@ -345,3 +348,25 @@ class Converter:
             self.repo.git.add(*files_to_add)  # repo.index.add does not work with symlinks
             commit = self.repo.index.commit("Add svn externals as git submodules", skip_hooks=True, author=Actor("svn2git", "svn2git@example.com"))
             cherrypick_to_all_branches(self.repo, commit, self.refs_to_push, cherrypick_progress, log=self.log)
+
+    def _create_symlink(self, local_path, origin, do_reset: bool = False):
+        full_local_path = os.path.join(self.working_dir, local_path)
+        if os.path.exists(full_local_path):
+            if do_reset:
+                os.remove(full_local_path)
+
+            else:
+                return
+
+        full_local_path_dirname = os.path.dirname(full_local_path)
+        origin_relative = os.path.join(os.path.relpath(self.working_dir, full_local_path_dirname), origin)
+        self.log(f"Creating symlink {local_path} to {origin_relative}")
+
+        os.makedirs(full_local_path_dirname, exist_ok=True)
+        os.symlink(
+            origin_relative,
+            full_local_path,
+            target_is_directory=os.path.isdir(os.path.join(self.working_dir, origin)),
+        )
+
+        yield os.path.relpath(full_local_path, self.working_dir)
