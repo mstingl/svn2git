@@ -317,7 +317,7 @@ def do_update(
                     )
                     while not all(c.disabled for c in choices):
                         if len(choices) > 1:
-                            selected = question.ask()
+                            selected = [i for i in question.ask() if not choices[i].disabled]
                             if selected is None:
                                 return
 
