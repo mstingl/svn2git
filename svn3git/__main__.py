@@ -417,11 +417,13 @@ def do_update(
                                 )
                                 progress.advance(task_id)
 
-                            except GitCommandError:
+                            except GitCommandError as error:
                                 if _try < 2:
                                     continue
 
-                                raise
+                                progress.stop()
+                                print("[red][b]ERROR[/b] Git failed to push (%s): %s[/red]" % (error.status, error.stderr))
+                                return
 
                             else:
                                 break
@@ -429,7 +431,7 @@ def do_update(
         if not all(svn_externals.keys()):
             progress.stop()
             print(
-                "[yellow][b]WARNING[/b]: This SVN repository contains externals with [b]local links[/b]. Those were [b]not[/b] migrated automatically.[/yellow]"
+                "[yellow][b]WARNING[/b]: This SVN repository contains externals with [b]local links[/b]. Those were [b]not[/b] migrated automatically. To display all externals, use [b]--show-externals[/b][/yellow]"
             )
 
 
