@@ -365,6 +365,10 @@ def do_update(
                         if not common_path_prefix:
                             common_path_prefix = os.path.dirname(selected_paths[0].repo)
 
+                        if not common_path_prefix:
+                            if typer.confirm("Should the path be changed?"):
+                                common_path_prefix = Prompt.ask("Enter path prefix for replacement")
+
                         if common_path_prefix and typer.confirm(
                             f"Should the {'common prefix' if len(selected_paths) > 1 else 'path'} ({common_path_prefix}) be removed or changed?"
                         ):
