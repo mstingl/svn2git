@@ -72,7 +72,7 @@ class Converter:
 
     def update_refs(self):
         for reference in self.references:
-            if isinstance(reference, (RemoteReference)) and reference.remote_head.startswith("tags/"):
+            if isinstance(reference, RemoteReference) and reference.remote_head.startswith("tags/"):
                 tag_name = reference.remote_head.removeprefix("tags/")
                 tag = next((tag for tag in self.repo.tags if tag_name == tag.name), None)
                 commit = reference.commit
@@ -225,7 +225,7 @@ class Converter:
 
         svn_url_prefix = os.path.commonprefix([self.svn_url, *[path.repo for path in svn_externals_repos]])
         for path in svn_externals_repos:
-            svn_repo_name, repo_path = path.repo.removeprefix(svn_url_prefix).split('/', 1)
+            svn_repo_name, repo_path = path.repo.removeprefix(svn_url_prefix).split('/', maxsplit=1)
             repo_path_prefix, ref = self.svn_path_to_ref(repo_path, path.ref)
             external_repos[svn_repo_name].append(
                 ExternalPath(
@@ -337,7 +337,7 @@ class Converter:
 
         for submodule_config in submodules_temp_config.values():
             do_reset = False
-            if submodule_config.do_skip:
+            if submodule_config.do_skip or not submodule_config.git_external_url:
                 yield
                 continue
 
@@ -349,13 +349,14 @@ class Converter:
                 shutil.rmtree(os.path.join(self.working_dir, submodule_config.submodule_path), onerror=rmtree_error_handler)
                 shutil.rmtree(os.path.join(self.working_dir, ".git", "modules", submodule_config.repo_name), onerror=rmtree_error_handler)
 
+                relative_url = os.path.relpath(submodule_config.git_external_url, self.repo.remotes.origin.url).replace("\\", "/")
                 self.log(
-                    f"Creating submodule {submodule_config.repo_name} ({submodule_config.git_external_url}@{submodule_config.branch or 'main'}) at {submodule_config.submodule_path}"
+                    f"Creating submodule {submodule_config.repo_name} ({relative_url}@{submodule_config.branch or 'main'}) at {submodule_config.submodule_path}"
                 )
                 created_submodule = self.repo.create_submodule(
                     name=submodule_config.repo_name,
                     path=submodule_config.submodule_path,
-                    url=submodule_config.git_external_url,
+                    url=relative_url,
                     branch=submodule_config.branch,
                 )
                 files_to_add.add('.gitmodules')

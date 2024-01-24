@@ -226,7 +226,7 @@ def do_update(
             with open(os.path.join(repo.working_dir, '.gitattributes')) as gitattributes:
                 lfs_filetypes = ",".join(
                     [
-                        attribute.split(' ', 1)[0]  # primitive checking, paths with spaces would fail, but should not be used in general
+                        attribute.split(' ', maxsplit=1)[0]  # primitive checking, paths with spaces would fail, but should not be used in general
                         for attribute in gitattributes.readlines()
                         if 'filter=lfs' in attribute and 'diff=lfs' in attribute and 'merge=lfs' in attribute
                     ]
