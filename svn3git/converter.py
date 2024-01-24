@@ -320,7 +320,8 @@ class Converter:
             if path.ref:
                 continue
 
-            files_to_add.add(*self._create_symlink(path.local, path.repo))
+            if symlink := self._create_symlink(path.local, path.repo):
+                files_to_add.add(symlink)
 
         return files_to_add
 
@@ -367,7 +368,8 @@ class Converter:
                     submodule_config.submodule_path,
                     submodule_config.common_path_replacement + path.repo.removeprefix(submodule_config.common_path_prefix).removeprefix('/'),
                 )
-                files_to_add.add(*self._create_symlink(path.local, origin, do_reset=do_reset))
+                if symlink := self._create_symlink(path.local, origin, do_reset=do_reset):
+                    files_to_add.add(symlink)
 
             yield
 
@@ -396,4 +398,4 @@ class Converter:
             target_is_directory=os.path.isdir(os.path.join(self.working_dir, origin)),
         )
 
-        yield os.path.relpath(full_local_path, self.working_dir)
+        return os.path.relpath(full_local_path, self.working_dir)
