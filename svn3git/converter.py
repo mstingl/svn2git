@@ -349,16 +349,25 @@ class Converter:
                 shutil.rmtree(os.path.join(self.working_dir, submodule_config.submodule_path), onerror=rmtree_error_handler)
                 shutil.rmtree(os.path.join(self.working_dir, ".git", "modules", submodule_config.repo_name), onerror=rmtree_error_handler)
 
-                relative_url = os.path.relpath(submodule_config.git_external_url, self.repo.remotes.origin.url).replace("\\", "/")
                 self.log(
-                    f"Creating submodule {submodule_config.repo_name} ({relative_url}@{submodule_config.branch or 'main'}) at {submodule_config.submodule_path}"
+                    f"Creating submodule {submodule_config.repo_name} ({submodule_config.git_external_url}@{submodule_config.branch or 'main'}) at {submodule_config.submodule_path}"
                 )
                 created_submodule = self.repo.create_submodule(
                     name=submodule_config.repo_name,
                     path=submodule_config.submodule_path,
-                    url=relative_url,
+                    url=submodule_config.git_external_url,
                     branch=submodule_config.branch,
                 )
+                relative_url = (
+                    os.path.relpath(submodule_config.git_external_url, self.repo.remotes.origin.url).replace("\\", "/")
+                    if os.path.commonprefix([submodule_config.git_external_url, self.repo.remotes.origin.url])
+                    else None
+                )
+                if relative_url:
+                    self.log(f"Using relative url for submodule {submodule_config.repo_name} ({relative_url})")
+                    with created_submodule.config_writer(write=True) as writer:
+                        writer.set_value("url", relative_url)
+
                 files_to_add.add('.gitmodules')
                 if submodule_config.commit:
                     submodule_repo = created_submodule.module()
