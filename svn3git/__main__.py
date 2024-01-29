@@ -313,90 +313,96 @@ def do_update(
                         choices=choices,
                         validate=lambda c: len(set(paths[int(i)].ref for i in c)) == 1,
                     )
-                    while not all(c.disabled for c in choices):
-                        if len(choices) > 1:
-                            selected = [i for i in question.ask() if not choices[i].disabled]
-                            if selected is None:
+                    try:
+                        while not all(c.disabled for c in choices):
+                            if len(choices) > 1:
+                                selected = [i for i in question.ask() if not choices[i].disabled]
+
+                                if selected is None:
+                                    return
+
+                            else:
+                                selected = [0]
+
+                            selected_paths: List[ExternalPath] = []
+                            for i in selected:
+                                print(f"- {choices[i].title}")
+                                selected_paths.append(paths[i])
+
+                            default_branch, revision = selected_paths[0].ref, None
+                            if default_branch and '@' in default_branch:
+                                default_branch, revision = default_branch.split('@')
+
+                            git_external_url = None
+                            while True:
+                                branch = Prompt.ask("Chose branch (empty to use default)", default=default_branch)
+                                commit = None
+                                if revision:
+                                    while not (commit := Prompt.ask(f"Enter commit hash for revision [b]{revision}[/b]")):
+                                        pass
+
+                                git_external_url = Prompt.ask(f"Input GIT url for repository (on [b]{branch or 'main'}[/b])")
+                                if git_external_url:
+                                    break
+
+                                if typer.confirm("Are you sure to skip this external?"):
+                                    submodules_temp_config[svn_repo_name] = SubmoduleConfig(do_skip=True)  # type: ignore
+                                    break
+
+                            for i in selected:
+                                choices[i].disabled = git_external_url or "(-)"
+
+                            if not git_external_url:
+                                continue
+
+                            common_path_replacement = ""
+                            if len(selected_paths) == 1:
+                                common_path_prefix = selected_paths[0].repo
+
+                            else:
+                                common_path_prefix = os.path.commonprefix([path.repo for path in selected_paths])
+                                if not common_path_prefix.endswith("/"):
+                                    common_path_prefix = ""
+
+                            if not common_path_prefix:
+                                common_path_prefix = os.path.dirname(selected_paths[0].repo)
+
+                            if not common_path_prefix:
+                                if typer.confirm("Should the path be changed?"):
+                                    common_path_prefix = Prompt.ask("Enter path prefix for replacement")
+
+                            if common_path_prefix and typer.confirm(
+                                f"Should the {'common prefix' if len(selected_paths) > 1 else 'path'} ({common_path_prefix}) be removed or changed?"
+                            ):
+                                common_path_replacement = Prompt.ask("Enter replacement or leave empty to remove")
+                                if common_path_replacement:
+                                    common_path_replacement = common_path_replacement.removesuffix('/') + '/'
+
+                            git_repo_name = os.path.basename(git_external_url).removesuffix('.git')
+                            submodule_path = os.path.join("external_repos", git_repo_name)
+                            if typer.confirm(f"Do you want to change the path ({submodule_path}) on which the submodule will be created?"):
+                                submodule_path = Prompt.ask("Enter new path for the submodule")
+
+                            submodule_key = f"{svn_repo_name}>{git_repo_name}"
+                            if submodule_key in submodules_temp_config:
+                                print("[red]Overlapping configuration, exiting! Please start again")
                                 return
 
-                        else:
-                            selected = [0]
+                            submodules_temp_config[submodule_key] = SubmoduleConfig(
+                                repo_name=git_repo_name,
+                                svn_repo_name=svn_repo_name,
+                                submodule_path=submodule_path,
+                                git_external_url=git_external_url,
+                                branch=branch,
+                                commit=commit,
+                                common_path_replacement=common_path_replacement,
+                                common_path_prefix=common_path_prefix.removesuffix("/"),
+                                paths=selected_paths,
+                            )
 
-                        selected_paths: List[ExternalPath] = []
-                        for i in selected:
-                            print(f"- {choices[i].title}")
-                            selected_paths.append(paths[i])
-
-                        default_branch, revision = selected_paths[0].ref, None
-                        if default_branch and '@' in default_branch:
-                            default_branch, revision = default_branch.split('@')
-
-                        git_external_url = None
-                        while True:
-                            branch = Prompt.ask("Chose branch (empty to use default)", default=default_branch)
-                            commit = None
-                            if revision:
-                                while not (commit := Prompt.ask(f"Enter commit hash for revision [b]{revision}[/b]")):
-                                    pass
-
-                            git_external_url = Prompt.ask(f"Input GIT url for repository (on [b]{branch or 'main'}[/b])")
-                            if git_external_url:
-                                break
-
-                            if typer.confirm("Are you sure to skip this external?"):
-                                submodules_temp_config[svn_repo_name] = SubmoduleConfig(do_skip=True)  # type: ignore
-                                break
-
-                        for i in selected:
-                            choices[i].disabled = git_external_url or "(-)"
-
-                        if not git_external_url:
-                            continue
-
-                        common_path_replacement = ""
-                        if len(selected_paths) == 1:
-                            common_path_prefix = selected_paths[0].repo
-
-                        else:
-                            common_path_prefix = os.path.commonprefix([path.repo for path in selected_paths])
-                            if not common_path_prefix.endswith("/"):
-                                common_path_prefix = ""
-
-                        if not common_path_prefix:
-                            common_path_prefix = os.path.dirname(selected_paths[0].repo)
-
-                        if not common_path_prefix:
-                            if typer.confirm("Should the path be changed?"):
-                                common_path_prefix = Prompt.ask("Enter path prefix for replacement")
-
-                        if common_path_prefix and typer.confirm(
-                            f"Should the {'common prefix' if len(selected_paths) > 1 else 'path'} ({common_path_prefix}) be removed or changed?"
-                        ):
-                            common_path_replacement = Prompt.ask("Enter replacement or leave empty to remove")
-                            if common_path_replacement:
-                                common_path_replacement = common_path_replacement.removesuffix('/') + '/'
-
-                        git_repo_name = os.path.basename(git_external_url).removesuffix('.git')
-                        submodule_path = os.path.join("external_repos", git_repo_name)
-                        if typer.confirm(f"Do you want to change the path ({submodule_path}) on which the submodule will be created?"):
-                            submodule_path = Prompt.ask("Enter new path for the submodule")
-
-                        submodule_key = f"{svn_repo_name}>{git_repo_name}"
-                        if submodule_key in submodules_temp_config:
-                            print("[red]Overlapping configuration, exiting! Please start again")
-                            return
-
-                        submodules_temp_config[submodule_key] = SubmoduleConfig(
-                            repo_name=git_repo_name,
-                            svn_repo_name=svn_repo_name,
-                            submodule_path=submodule_path,
-                            git_external_url=git_external_url,
-                            branch=branch,
-                            commit=commit,
-                            common_path_replacement=common_path_replacement,
-                            common_path_prefix=common_path_prefix.removesuffix("/"),
-                            paths=selected_paths,
-                        )
+                    except TypeError:
+                        print("[red][b]Cancelled[/b][/red]")
+                        return
 
                 with open(converter.svn_externals_to_git_config_file, 'wb') as config_file:
                     config_file.write(bytes(submodules_temp_config.model_dump_json(), 'utf-8'))
