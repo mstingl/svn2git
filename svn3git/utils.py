@@ -60,8 +60,12 @@ def git_progress(
     )
 
 
-def git_svn_show(repo, cmd) -> list[str]:
-    return [folder for folder in repo.git.svn(f"show-{cmd}", "--id=origin/trunk").splitlines() if folder.strip() and not folder[0] == '#']
+def git_svn_show(repo, cmd, branch="origin/trunk") -> list[str]:
+    return [
+        folder
+        for folder in str(repo.git.svn(f"show-{cmd}", f"--id={branch}")).splitlines()
+        if folder.strip() and not folder.removeprefix('/').startswith('#')
+    ]
 
 
 def reference_name(reference):
